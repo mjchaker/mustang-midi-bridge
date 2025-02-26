@@ -24,6 +24,9 @@ public:
   {
     memcpy( this->model, model, 2 );
   }
+  
+  // Virtual destructor to ensure proper cleanup of derived classes
+  virtual ~DelayCC() {}
 
   int dispatch( int cc, int value, unsigned char *cmd );
   const unsigned char *getModel( void ) { return model;}

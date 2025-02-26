@@ -5,7 +5,7 @@
 
 #include <stdint.h>
 #include <cstring>
-#include <libusb-1.0/libusb.h>
+#include <libusb-1.0/libusb.h>  // Path for macOS with Homebrew
 #include <pthread.h>
 #include "constants.h"
 
