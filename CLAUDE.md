@@ -1,34 +1,75 @@
-# Mustang MIDI Bridge Usage Guide
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What This Is
+
+A bridge daemon (`mustang_midi`) that translates MIDI messages into the proprietary USB protocol of Fender Mustang amplifiers. Implements ~99% of the Fender Mustang Floor MIDI spec (see `doc/MIDX20_Midi_Spec.pdf`; reverse-engineered protocol notes in `doc/fender_mustang_protocol.txt`). Originally targets Linux (Raspberry Pi / Beaglebone deployment); the current `Makefile` is adapted for macOS ARM with Homebrew.
 
 ## Build Commands
-- Build (normal): `make`
+
+- Build (optimized, default): `make`
 - Build (debug): `make debug`
-- Build (optimized): `make opt`
+- Build (explicit optimized): `make opt`
 - Clean: `make clean`
-- Legacy rtmidi build: `make CPPFLAGS=-DRTMIDI_2_0`
+- Old rtmidi (`RtError` instead of `RtMidiError`): `make CPPFLAGS=-DRTMIDI_2_0`
+
+Note: `Makefile` hardcodes `-arch arm64` and Homebrew paths for libusb/rtmidi (macOS M1). `Makefile.bak` is the prior cross-platform version with Linux support (`-lrtmidi -lusb-1.0`, `/usr/include/rtmidi`). Requires libusb-1.0, rtmidi, pthread; C++11.
 
 ## Run Commands
+
+- Run bridge on a hardware port: `./mustang_midi <controller_port#> <midi_channel#>`
+- Run bridge with a virtual port: `./mustang_midi <virtual_port_name> <midi_channel#>` (channel is 1–16)
+- Convenience wrapper: `./run_mustang.sh [command] [value]` (e.g., `gain 100`, `preset 10`, `tuner on`; run with no args for full command list)
 - Create virtual MIDI port: `./run_mustang.sh create-port`
 - List MIDI ports: `./run_mustang.sh midi-ports`
-- Control amp: `./run_mustang.sh [command] [value]` (e.g., `./run_mustang.sh gain 100`)
 
 ## Test Commands
-- Run regression tests: `python test.py <controller_port> <midi_channel> <v1|v2> [test_name]`
-- Run single test: `python test.py <controller_port> <midi_channel> <v1|v2> [pc|tuner|efxbypass|amp]`
-- Tests require a connected Mustang amp
 
-## Python Dependencies
-- mido: `pip install mido`
-- rtmidi: `pip install python-rtmidi`
-- pyusb: `pip install pyusb`
+Tests are interactive regression tests requiring a physically connected Mustang amp (no CI/unit tests).
+
+- All tests: `python test.py <controller_port> <midi_channel> <v1|v2>`
+- Single test: `python test.py <controller_port> <midi_channel> <v1|v2> [pc|tuner|efxbypass|amp]`
+- Typical flow (see `README.testing`): start `mustang_midi "TestPort" 1`, find the assigned port with `aconnect -o`, then run `test.py "RtMidi Input Client 128:0" 1 v2`
+
+Python dependencies: `pip install mido python-rtmidi pyusb`
+
+## Architecture
+
+Data flow: MIDI message → RtMidi callback → CC dispatch → `Mustang` method → USB command → amp; a listener thread reads amp responses and signals waiting commands.
+
+### C++ daemon (the core)
+
+- `mustang_midi.cpp` — `main()` plus the MIDI callback (`message_action`). Contains the entire CC number map: CC 20 tuner, CC 22 all-effects bypass, CC 23–26 per-effect toggles, CC 28/38/48/58/68 select stomp/mod/delay/reverb/amp model, and CC ranges 29–33/39–43/49–54/59–63/69–79 for the corresponding DSP's parameters. Program Change selects presets 0–99.
+- `mustang.cpp/.h` — `Mustang` class owns all USB I/O (libusb-1.0, 64-byte packets, endpoints `0x01`/`0x81`). `initialize()` probes the `amp_ids[]` PID table to identify the amp and whether it's a v1 or v2 series (this determines the init magic byte and available models). `commStart()` spawns a pthread (`handleInput`) that continuously reads USB responses; command methods block on `Condition<T>` (pthread mutex + condvar) members until the listener thread sees the matching ack byte-prefix (e.g. `cc_ack`, `model_change_ack`). State kept: `dsp_parms[6][64]` raw parameter blocks (indices `AMP_STATE`…`PEDAL_STATE` from `constants.h`) and 124 preset names.
+- `magic.cpp` — initialization handshake packet sequence sent at startup.
+- `constants.h` — Fender USB VID/PIDs, DSP state-block indices, byte offset of the model ID (`MODEL` = 16).
+
+### Per-DSP model class families
+
+Each DSP category (amp, stomp, mod, delay, reverb) follows the same three-file pattern:
+
+- `<dsp>.h/.cpp` — a base CC-handler class (`AmpCC`, `StompCC`, …) with virtual `cc##()` methods, one per MIDI CC. Each method encodes the USB parameter offsets for that control via `continuous_control()`/`discrete_control()`. Model-specific subclasses (defined in the same header) override the methods that differ. `dispatch()` routes an incoming CC to the right method.
+- `<dsp>_models.cpp/.h` — 2-byte USB model ID constants for every supported model (v2-only models flagged in comments).
+- `<dsp>_defaults.h` — canned 64-byte parameter blocks sent when switching to a model, so it comes up with sane settings.
+
+When the listener thread receives a DSP state block, `Mustang::update<Dsp>Obj()` reads the model ID at byte offset `MODEL` and swaps in the matching subclass instance (`curr_amp`, `curr_stomp`, …). To add a new model: add its ID to `<dsp>_models.*`, defaults to `<dsp>_defaults.h`, a subclass in `<dsp>.h` if its CC mapping differs, and wire it into the factory logic in `mustang.cpp`.
+
+### Python utilities
+
+- `amp_control.py` — send a single CC to a MIDI port (used by `run_mustang.sh`).
+- `create_virtual_port.py` — hold open a virtual MIDI port.
+- `direct_control.py` / `change_preset.py` — bypass MIDI entirely and talk USB directly via pyusb (useful for protocol debugging without the daemon).
+- `test.py` — interactive regression tests.
+
+### Linux deployment (headless)
+
+`install.sh` installs the binary, `mustang_bridge` init script, and udev rules (`50-mustang.rules`, `60-midi.rules`). The udev rules trigger `mustang_bridge_start`, which auto-launches `mustang_midi` when both the amp and a configured MIDI controller (VID/PID edited at the top of that script) are plugged in.
 
 ## Code Style
-- C++: Use C++11 standard with header guards and class-based design
-- C++ naming: camelCase for variables, PascalCase for class names
-- Indentation: 2 spaces for C++, 4 spaces for Python
-- Place opening braces on the same line as function declarations
-- Use const correctness and virtual destructors for abstract classes
-- Use standard memory management (avoid raw pointers)
-- Python: Follow PEP 8 style guide, use descriptive function/variable names
-- Error handling: Return error codes rather than using exceptions
-- Comments: Document public interfaces and complex algorithms
+
+- C++11; header guards; 2-space indent (C++), 4-space (Python, PEP 8)
+- camelCase variables, PascalCase class names; opening braces on the same line
+- Error handling by return code (0 = success, nonzero = failure) — no exceptions in the C++ core; RtMidi exceptions are caught at the boundary in `main()`
+- const correctness; document public interfaces and protocol/byte-layout logic
+- Build artifacts (`*.o`, `*.d`, `mustang_midi`) are currently tracked in git — expect them to show up in diffs after building
