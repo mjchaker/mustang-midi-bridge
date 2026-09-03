@@ -9,7 +9,7 @@ if [ ! -f "mustang_midi" ]; then
     exit 1
 fi
 
-if ! `grep -q mustang-user /etc/passwd`; then
+if ! id -u mustang-user >/dev/null 2>&1; then
     echo "Create non-privileged user for MIDI bridge"
     useradd -M -s /bin/false -G plugdev,audio mustang-user
 fi

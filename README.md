@@ -94,47 +94,55 @@ following exceptions:
   
 # Prerequisites
 
-  + For Ubuntu Precise or Debian Jessie the following packages must be
-    present.  Install all but 'pyusb' with 'apt-get' (see below).
+  + Linux (Debian / Raspberry Pi OS / Ubuntu):
 
-    - libasound2
-    - librtmidi-dev
-    - libusb-1.0-0-dev
-    - libjack0 (Precise) 
-    - libjackQ (Jessie)
-    - at
-    - python2.7
-    - python2.7-dev
-    - python-pip
-    - pyusb
 ```
-    NOTE: The python-pip install may segfault at the end, but it doesn't
-          seem to affect anything.
+$ sudo apt-get install build-essential pkg-config librtmidi-dev libusb-1.0-0-dev at python3 python3-pip
+$ pip3 install pyusb
 ```
-    'pyusb' must be installed last using 'pip':
 
-    $ pip install pyusb
+    'pyusb' is used by the udev helper scripts (`mustang_bridge_start`
+    and `mustang_bridge_stop`) to detect the amp and controller.
 
-  + If you want to run the regression tests, you'll also need:
+  + macOS (Homebrew):
 
-    - 'Mido' Python MIDI extension
-    - Python rtmidi extension
+```
+$ brew install rtmidi libusb pkg-config
+```
 
-    'mido' and rtmidi are not available as a DEB package and must be
-    installed using 'pip':
+  + If you want to run the regression tests or the `run_mustang.sh`
+    helper, you'll also need the Python MIDI packages:
 
-    $ pip install --pre python-rtmidi
-
-    $ pip install mido
+```
+$ pip3 install mido python-rtmidi
+```
 
 Would appreciate feedback on requirements for other distributions.
 
 # Build
 ```
-$ make
- or
-$ make CPPFLAGS=-DRTMIDI_2_0 (for older librtmidi)
+$ make            # optimized build
+$ make debug      # -g, plus a hex dump of every packet from the amp
+$ make test       # build and run the hardware-free unit tests
+$ make CPPFLAGS=-DRTMIDI_2_0   # for very old librtmidi (RtError)
 ```
+
+The Makefile locates rtmidi and libusb through `pkg-config` and works
+unchanged on Linux and macOS.
+
+# Run by hand
+
+```
+$ ./mustang_midi <port#> <channel>       # listen on an existing MIDI input port
+$ ./mustang_midi <port_name> <channel>   # create a virtual input port with that name
+```
+
+The channel is 1..16.  The bridge shuts down cleanly (releasing the
+USB interface) on Ctrl-C, SIGTERM or SIGHUP.
+
+The `run_mustang.sh` wrapper sends individual MIDI commands to a
+running bridge (`./run_mustang.sh` with no arguments lists them), and
+`amp_control.py` with no arguments prints the complete controller map.
 
 # Configure
 

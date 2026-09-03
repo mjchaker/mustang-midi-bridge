@@ -1,14 +1,17 @@
-#!/usr/bin/python
+#!/usr/bin/env python3
+#
+# Launched by udev (via 'at') whenever the Mustang amp or the MIDI
+# controller is plugged in.  If both are present and no bridge is
+# already running, drop privileges and exec mustang_midi.
+#
+# Requires: python3, pyusb (pip3 install pyusb)
 
 import os
 import sys
-from os.path import expanduser
-from pwd import getpwnam
-from grp import getgrnam
-
 import glob
 import syslog
-from string import split
+from pwd import getpwnam
+from grp import getgrnam
 
 import usb.core
 
@@ -16,7 +19,7 @@ rundir = "/var/run/mustang/"
 
 # Mustang USB parms
 mustang_vid = 0x1ed8
-mustang_pids = ( 0x0004, 0x0005, 0x000a, 0x0010, 0x0012, 0x0014, 0x0016 )
+mustang_pids = (0x0004, 0x0005, 0x000a, 0x0010, 0x0012, 0x0014, 0x0016)
 
 ####### Start User Edits #########
 
@@ -24,61 +27,56 @@ mustang_pids = ( 0x0004, 0x0005, 0x000a, 0x0010, 0x0012, 0x0014, 0x0016 )
 control_vid = 0x0763
 control_pid = 0x0160
 
-# Controller MIDI device
+# Controller MIDI device (ALSA card index, see README)
 midi_device = 1
 
-# MIDI listen channel
+# MIDI listen channel (1..16)
 midi_channel = 1
 
 ######## End User Edits ##########
 
 # Look for devices
-controller = usb.core.find( idVendor = control_vid, idProduct = control_pid )
-if ( not controller ):
-    sys.exit( 0 )
+controller = usb.core.find(idVendor=control_vid, idProduct=control_pid)
+if not controller:
+    sys.exit(0)
 
-mustang = False
-for pid in mustang_pids:
-    device = usb.core.find( idVendor = mustang_vid, idProduct = pid )
-    if ( device ):
-        mustang = True
-        break
-
-if ( not mustang ):
-    sys.exit( 0 )
+mustang = any(usb.core.find(idVendor=mustang_vid, idProduct=pid)
+              for pid in mustang_pids)
+if not mustang:
+    sys.exit(0)
 
 pid = os.getpid()
-# syslog.syslog( "%d: Starting" % pid )
 
 # Look for atomic pid file
-os.chdir( rundir )
-filelist = glob.glob( 'mustang_*' )
-if len( filelist ) != 1:
-    syslog.syslog( "%d: /var/run/mustang is not properly setup" % pid )
-    sys.exit( 0 )
+os.chdir(rundir)
+filelist = glob.glob('mustang_*')
+if len(filelist) != 1:
+    syslog.syslog("%d: /var/run/mustang is not properly setup" % pid)
+    sys.exit(0)
 
 # Found file.  Parse out the PID of the process that created it.
 lockfile = filelist[0]
-oldpid = split( lockfile, '_' )[1]
+oldpid = lockfile.split('_')[1]
 
-# syslog.syslog( "%d: Check for path /proc/%s" % (pid, oldpid) )
-if not os.path.exists( "/proc/%s" % oldpid ):
-    # No such process, ok to start ours
-    # syslog.syslog( "%d: Renaming %s to mustang_%d" % (pid, lockfile, pid) )
-    try:
-        os.rename( lockfile, "mustang_%d" % os.getpid() ) 
-    except Exception, e:
-        pass
-        # syslog.syslog( "%d: Unable to rename file" % pid )
-    else:
-        # syslog.syslog( "%d: About to exec" % pid )
-        # Drop privileges and start the program
-        pwObj = getpwnam('mustang-user')
-        os.setgid( pwObj.pw_gid )
-        
-        # Need secondary groups to access MIDI and USB devices
-        sec_gids = ( getgrnam('plugdev').gr_gid, getgrnam('audio').gr_gid )
-        os.setgroups( sec_gids )
-        
-        os.setuid( pwObj.pw_uid )
-        os.execl( "/usr/local/bin/mustang_midi", "mustang_midi", "%s" % midi_device, "%s" % midi_channel )
+if os.path.exists("/proc/%s" % oldpid):
+    # Bridge already running
+    sys.exit(0)
+
+# No such process, ok to start ours.  The rename is atomic, so if two
+# instances race here only one of them succeeds.
+try:
+    os.rename(lockfile, "mustang_%d" % pid)
+except OSError:
+    sys.exit(0)
+
+# Drop privileges and start the program
+pwObj = getpwnam('mustang-user')
+os.setgid(pwObj.pw_gid)
+
+# Need secondary groups to access MIDI and USB devices
+sec_gids = (getgrnam('plugdev').gr_gid, getgrnam('audio').gr_gid)
+os.setgroups(sec_gids)
+
+os.setuid(pwObj.pw_uid)
+os.execl("/usr/local/bin/mustang_midi", "mustang_midi",
+         str(midi_device), str(midi_channel))

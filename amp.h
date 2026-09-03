@@ -31,9 +31,11 @@ public:
     memcpy( this->model, model, 2 );
   }
 
+  virtual ~AmpCC() {}
+
   int dispatch( int cc, int value, unsigned char *cmd );
-  const unsigned char *getModel( void ) { return model;}
-  const unsigned char getSlot( void ) { return slot;}
+  const unsigned char *getModel( void ) const { return model;}
+  unsigned char getSlot( void ) const { return slot;}
 
 private:
   // Gain
@@ -65,8 +67,8 @@ private:
   }
 
   // Dummy in base class
-  virtual int cc78( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc79( int value, unsigned char *cmd ) { return -1;}
+  virtual int cc78( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc79( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
 
   // Noise Gate Custom Threshold
   virtual int cc90( int value, unsigned char *cmd ) { 
@@ -76,7 +78,7 @@ private:
   // Noise Gate Custom Depth
   virtual int cc91( int value, unsigned char *cmd ) { return continuous_control( 0x09, 0x09, 0x0c, value, cmd );}
   // Dummy in base class
-  virtual int cc92( int value, unsigned char *cmd ) { return -1;}
+  virtual int cc92( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
 };
 
 
@@ -124,7 +126,7 @@ private:
     // 0 --> Bright On
     if ( value>63 && value <=127 ) flag = 0;
     else                           flag = 1;
-    return discrete_control( 0x14, 0x14, 0x8d, value, cmd );
+    return discrete_control( 0x14, 0x14, 0x8d, flag, cmd );
   }
 };
   
@@ -152,11 +154,11 @@ public:
   AmpCC5( Mustang * theAmp, const unsigned char *model, const unsigned char theSlot ) : AmpCC(theAmp,model,theSlot) {}
 private:
   // No sag / bias
-  virtual int cc74( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc75( int value, unsigned char *cmd ) { return -1;}
+  virtual int cc74( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc75( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
   // No pres / master
-  virtual int cc78( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc79( int value, unsigned char *cmd ) { return -1;}
+  virtual int cc78( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc79( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
 };
   
 
@@ -195,7 +197,7 @@ private:
     // 0 --> Bright On
     if ( value>63 && value <=127 ) flag = 0;
     else                           flag = 1;
-    return discrete_control( 0x14, 0x14, 0x8d, value, cmd );
+    return discrete_control( 0x14, 0x14, 0x8d, flag, cmd );
   }
 };
   
@@ -206,17 +208,17 @@ class NullAmpCC : public AmpCC {
 public:
   NullAmpCC( Mustang * theAmp, const unsigned char *model, const unsigned char theSlot ) : AmpCC(theAmp,model,theSlot) {}
 private:
-  virtual int cc69( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc70( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc71( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc72( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc73( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc74( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc75( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc76( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc77( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc78( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc79( int value, unsigned char *cmd ) { return -1;}
+  virtual int cc69( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc70( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc71( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc72( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc73( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc74( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc75( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc76( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc77( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc78( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc79( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
 };
   
 #endif

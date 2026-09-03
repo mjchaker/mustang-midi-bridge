@@ -26,34 +26,32 @@ def send_control_change(port_name, control, value, channel=0):
             time.sleep(0.5)  # Give time for the message to be processed
     except Exception as e:
         print(f"Error: {e}")
+        return False
+    return True
 
 def show_controls():
-    """Display available control parameters based on MIDI spec"""
-    print("\nCommon Control Parameters:")
+    """Display the controller numbers understood by mustang_midi (see midi_cc.h)"""
+    print("\nControl Parameters (mustang_midi CC map):")
     print("  20: Tuner (0=off, 127=on)")
-    print("  22: Effect Bypass (0=bypass, 127=active)")
-    print("  68: Amp Model (0-18)")
-    print("  69: Gain")
-    print("  70: Volume")
-    print("  71: Treble")
-    print("  72: Middle")
-    print("  73: Bass")
-    print("  74: Presence/Cabinet")
-    print("  75: Noise Gate")
-    print("  76: Master Volume")
-    print("  77: Gain2/Threshold")
-    print("  78: Stomp Model (0-11)")
-    print("  79: Stomp Enable (0=off, 127=on)")
-    print("  80-83: Stomp Parameters")
-    print("  84: Modulation Model (0-11)")
-    print("  85: Modulation Enable (0=off, 127=on)")
-    print("  86-89: Modulation Parameters")
-    print("  90: Delay Model (0-8)")
-    print("  91: Delay Enable (0=off, 127=on)")
-    print("  92-95: Delay Parameters")
-    print("  96: Reverb Model (0-8)")
-    print("  97: Reverb Enable (0=off, 127=on)")
-    print("  98-99: Reverb Parameters")
+    print("  22: All effects (0=bypass, 127=active)")
+    print("  23: Stomp on/off      24: Modulation on/off")
+    print("  25: Delay on/off      26: Reverb on/off")
+    print("  28: Stomp model (0=none, 1-7 v1, 8-12 v2 only)")
+    print("  29-33: Stomp parameters")
+    print("  38: Modulation model (0=none, 1-11 v1, 12-14 v2 only)")
+    print("  39-43: Modulation parameters")
+    print("  48: Delay model (0=none, 1-9)")
+    print("  49-54: Delay parameters")
+    print("  58: Reverb model (0=none, 1-10)")
+    print("  59-63: Reverb parameters (level, decay, dwell, diffusion, tone)")
+    print("  68: Amp model (0=none, 1-12 v1, 13-17 v2 only)")
+    print("  69: Gain              70: Channel volume")
+    print("  71: Treble            72: Middle")
+    print("  73: Bass              74: Sag (0-2)")
+    print("  75: Bias              76: Noise gate (0-4)")
+    print("  77: Cabinet (0-12)    78: Presence / Gain 2 / Cut (model dependent)")
+    print("  79: Master volume / Blend (model dependent)")
+    print("Program Change 0-99 selects a preset.")
 
 if __name__ == "__main__":
     # Show help if no arguments provided
@@ -79,6 +77,9 @@ if __name__ == "__main__":
     except ValueError:
         print("Error: Control number and value must be integers")
         sys.exit(1)
+    if not (0 <= control <= 127 and 0 <= value <= 127):
+        print("Error: Control number and value must be between 0 and 127")
+        sys.exit(1)
     
     # Optional channel parameter (0-15 for channels 1-16)
     channel = 0  # Default to channel 1
@@ -92,4 +93,4 @@ if __name__ == "__main__":
             sys.exit(1)
     
     # Send the control change
-    send_control_change(port_name, control, value, channel)
+    sys.exit(0 if send_control_change(port_name, control, value, channel) else 1)

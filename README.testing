@@ -16,6 +16,11 @@ $ aconnect -o
 
 Given the above, open RtMidi:
 
-$ test.py "RtMidi Input Client 128:0" 1 [v1 | v2] {test name} 
+$ python3 test.py "RtMidi Input Client 128:0" 1 [v1 | v2] {test name} 
 
-(Select appropriate amp series and optionally run only a single test)
+(Select appropriate amp series and optionally run only a single test
+from: pc, tuner, efxbypass, stomp, mod, reverb, delay, amp)
+
+The hardware-free unit tests do not need any of the above:
+
+$ make test

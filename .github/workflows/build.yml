@@ -1,0 +1,36 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            librtmidi-dev libusb-1.0-0-dev pkg-config
+      - name: Build (optimized)
+        run: make
+      - name: Unit tests
+        run: make test
+      - name: Syntax-check scripts
+        run: |
+          python3 -m py_compile amp_control.py change_preset.py create_virtual_port.py \
+            direct_control.py test.py mustang_bridge_start mustang_bridge_stop
+          bash -n run_mustang.sh run_midi.sh install.sh
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: brew install rtmidi libusb pkg-config
+      - name: Build
+        run: make
+      - name: Unit tests
+        run: make test
