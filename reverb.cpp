@@ -41,8 +41,8 @@ ReverbCC::dispatch( int cc, int value, unsigned char *cmd ) {
     return cc63( value, cmd );
     break;
   default:
-    return 0;
-    break;
+    // Not a controller this DSP understands; caller sends nothing
+    return -1;
   }
 }
 

@@ -29,8 +29,8 @@ public:
   virtual ~ModCC() {}
 
   int dispatch( int cc, int value, unsigned char *cmd );
-  const unsigned char *getModel( void ) { return model;}
-  const unsigned char getSlot( void ) { return slot;}
+  const unsigned char *getModel( void ) const { return model;}
+  unsigned char getSlot( void ) const { return slot;}
 
 private:
   virtual int cc39( int value, unsigned char *cmd ) = 0;
@@ -233,11 +233,11 @@ class NullModCC : public ModCC {
 public:
   NullModCC( Mustang * theAmp, const unsigned char *model, const unsigned char theSlot ) : ModCC(theAmp,model,theSlot) {}
 private:
-  virtual int cc39( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc40( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc41( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc42( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc43( int value, unsigned char *cmd ) { return -1;}
+  virtual int cc39( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc40( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc41( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc42( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc43( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
 };
 
 

@@ -29,8 +29,8 @@ public:
   virtual ~DelayCC() {}
 
   int dispatch( int cc, int value, unsigned char *cmd );
-  const unsigned char *getModel( void ) { return model;}
-  const unsigned char getSlot( void ) { return slot;}
+  const unsigned char *getModel( void ) const { return model;}
+  unsigned char getSlot( void ) const { return slot;}
 
 private:
   // Level
@@ -56,7 +56,7 @@ private:
   // Attenuation
   virtual int cc53( int value, unsigned char *cmd ) { return continuous_control( 0x04, 0x04, 0x01, value, cmd );}
   // no-op
-  virtual int cc54( int value, unsigned char *cmd ) { return -1;}
+  virtual int cc54( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
 };
 
 
@@ -91,7 +91,7 @@ private:
     else             return discrete_control( 0x04, 0x04, 0x8b, value, cmd );
   }
   // no-op
-  virtual int cc54( int value, unsigned char *cmd ) { return -1;}
+  virtual int cc54( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
 };
 
 
@@ -106,7 +106,7 @@ private:
   // Stereo
   virtual int cc53( int value, unsigned char *cmd ) { return continuous_control( 0x04, 0x04, 0x01, value, cmd );}
   // no-op
-  virtual int cc54( int value, unsigned char *cmd ) { return -1;}
+  virtual int cc54( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
 };
 
 
@@ -121,7 +121,7 @@ private:
   // Threshold
   virtual int cc53( int value, unsigned char *cmd ) { return continuous_control( 0x04, 0x04, 0x01, value, cmd );}
   // no-op
-  virtual int cc54( int value, unsigned char *cmd ) { return -1;}
+  virtual int cc54( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
 };
 
 
@@ -136,7 +136,7 @@ private:
   // Tone
   virtual int cc53( int value, unsigned char *cmd ) { return continuous_control( 0x04, 0x04, 0x01, value, cmd );}
   // no-op
-  virtual int cc54( int value, unsigned char *cmd ) { return -1;}
+  virtual int cc54( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
 };
 
 
@@ -174,12 +174,12 @@ class NullDelayCC : public DelayCC {
 public:
   NullDelayCC( Mustang * theAmp, const unsigned char *model, const unsigned char theSlot ) : DelayCC(theAmp,model,theSlot) {}
 private:
-  virtual int cc49( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc50( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc51( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc52( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc53( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc54( int value, unsigned char *cmd ) { return -1;}
+  virtual int cc49( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc50( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc51( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc52( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc53( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc54( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
 };
 
 

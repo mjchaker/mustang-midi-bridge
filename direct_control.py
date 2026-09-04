@@ -1,6 +1,10 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # Direct USB control of Mustang amp without MIDI
 # Based on information from the mustang_bridge code
+#
+# NOTE: this talks to the amp directly, so it cannot be used while
+# mustang_midi is running (the bridge holds the USB interface).  It is
+# a protocol debugging aid; use change_preset.py for normal operation.
 
 import usb.core
 import usb.util
@@ -29,10 +33,14 @@ def change_preset(device, preset_number):
         print("Preset number must be between 0 and 99")
         return False
     
-    # Create the preset change command
-    # Based on the USB protocol used in mustang_bridge
-    command = bytearray([0x1c, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00])
+    # Create the preset change command.  Every Mustang packet is 64
+    # bytes; layout matches Mustang::patchChange() in mustang.cpp.
+    command = bytearray(64)
+    command[0] = 0x1c
+    command[1] = 0x01
+    command[2] = 0x01
     command[4] = preset_number
+    command[6] = 0x01
     
     try:
         # Send the command to the amp

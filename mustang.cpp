@@ -1,6 +1,8 @@
 #include "mustang.h"
 
 #include <cstdio>
+#include <cerrno>
+#include <ctime>
 #include <unistd.h>
 
 #include "amp_models.h"
@@ -54,7 +56,24 @@ const Mustang::usb_id Mustang::amp_ids[] = {
 };
 
 
-Mustang::Mustang( void ) {
+Mustang::Mustang( void ) :
+  usb_io( NULL ),
+  kernel_driver_detached( false ),
+  worker_running( false ),
+  want_shutdown( false ),
+  curr_preset_idx( 0 ),
+  curr_amp( NULL ),
+  curr_stomp( NULL ),
+  curr_mod( NULL ),
+  curr_delay( NULL ),
+  curr_reverb( NULL ),
+  isV2( false )
+{
+  pthread_mutex_init( &shutdown_lock, NULL );
+
+  memset( preset_names, 0, sizeof(preset_names) );
+  memset( dsp_parms, 0, sizeof(dsp_parms) );
+
   // Make model select effective
   memset( execute, 0x00, 64 );
   execute[0] = 0x1c;
@@ -62,6 +81,43 @@ Mustang::Mustang( void ) {
 
   // So far, this is the only state flag we need to pre-condition
   tuner_ack_sync.value = false;
+}
+
+
+Mustang::~Mustang( void ) {
+  if ( worker_running ) commShutdown();
+  deinitialize();
+
+  delete curr_amp;
+  delete curr_stomp;
+  delete curr_mod;
+  delete curr_delay;
+  delete curr_reverb;
+
+  pthread_mutex_destroy( &shutdown_lock );
+}
+
+
+int
+Mustang::awaitFlag( Condition<bool> &sync, bool target, int timeout_ms ) {
+  struct timespec deadline;
+  clock_gettime( CLOCK_REALTIME, &deadline );
+  deadline.tv_sec  += timeout_ms / 1000;
+  deadline.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
+  if ( deadline.tv_nsec >= 1000000000L ) {
+    deadline.tv_sec  += 1;
+    deadline.tv_nsec -= 1000000000L;
+  }
+
+  while ( sync.value != target ) {
+    int rc = pthread_cond_timedwait( &sync.cond, &sync.lock, &deadline );
+    if ( rc == ETIMEDOUT ) {
+      if ( sync.value == target ) break;
+      fprintf( stderr, "W - Timed out waiting for amp acknowledge\n" );
+      return LIBUSB_ERROR_TIMEOUT;
+    }
+  }
+  return 0;
 }
 
 
@@ -80,7 +136,7 @@ Mustang::handleInput( void ) {
   int total_count = 0;
 
   while ( 1 ) {
-    int count;
+    int count = 0;
     rc = libusb_interrupt_transfer( usb_io, USB_IN, read_buf, 64, &count, USB_TIMEOUT_MS );
     total_count += count;
 
@@ -134,10 +190,14 @@ Mustang::handleInput( void ) {
           // Rev/Delay
           else if ( 2 == preset_category ) idx += 112;
 
+          // Guard against a malformed report indexing past the table
+          if ( idx < 0 || idx >= NUM_PRESET_NAMES ) break;
+
           // Preset name
           pthread_mutex_lock( &preset_names_sync.lock );
 
-          strncpy( preset_names[idx], (const char *)read_buf+16, 32 );
+          // Name occupies bytes 16..47 and is not necessarily terminated
+          memcpy( preset_names[idx], read_buf+16, 32 );
           preset_names[idx][32] = '\0';
 
           // Always take the most recent amp preset name as
@@ -290,7 +350,7 @@ Mustang::sendCmd( unsigned char *buffer ) {
   int attempts = 5;
   
   while ( total_count < 64 ) {
-    int count;
+    int count = 0;
     int rc = libusb_interrupt_transfer( usb_io, USB_OUT, buffer, 64, &count, USB_TIMEOUT_MS );
     if ( rc ) {
       if ( rc==LIBUSB_ERROR_TIMEOUT ) {
@@ -304,6 +364,42 @@ Mustang::sendCmd( unsigned char *buffer ) {
     total_count += count;
   }
   return 0;
+}
+
+
+// Read and discard one 64-byte reply packet
+int
+Mustang::drainReply( void ) {
+  unsigned char buffer[64];
+  int total_count = 0;
+  int attempts = 5;
+
+  while ( total_count < 64 ) {
+    int count = 0;
+    int rc = libusb_interrupt_transfer( usb_io, USB_IN, buffer, 64, &count, USB_TIMEOUT_MS );
+    if ( rc && rc!=LIBUSB_ERROR_TIMEOUT ) return rc;
+    if ( rc==LIBUSB_ERROR_TIMEOUT && --attempts == 0 ) return rc;
+    total_count += count;
+  }
+  return 0;
+}
+
+
+// Undo a partially completed initialize() and pass the error through
+int
+Mustang::initFailed( int rc ) {
+  if ( usb_io != NULL ) {
+    // Harmless if the interface was never claimed
+    libusb_release_interface( usb_io, 0 );
+    if ( kernel_driver_detached ) {
+      libusb_attach_kernel_driver( usb_io, 0 );
+      kernel_driver_detached = false;
+    }
+    libusb_close( usb_io );
+    usb_io = NULL;
+  }
+  libusb_exit( NULL );
+  return rc;
 }
 
 
@@ -327,55 +423,44 @@ Mustang::initialize( void ) {
         
   if ( init_value < 0 ) {
     // No amp found
-    libusb_exit( NULL );
     fprintf( stderr, "S - No Mustang USB device found\n" );
-    return -1;
+    return initFailed( -1 );
   }
 
-  // If kernel driver is active, detach it
-  if ( libusb_kernel_driver_active( usb_io,0) ) {
+  // If kernel driver is active, detach it (returns 1 when active; on
+  // platforms without kernel drivers, e.g. macOS, returns 0 or an
+  // error code we can safely ignore)
+  if ( libusb_kernel_driver_active( usb_io, 0 ) == 1 ) {
     // If detach fails, we're hosed...
-    if ( 0 != (rc = libusb_detach_kernel_driver(usb_io,0)) ) return rc;
+    if ( 0 != (rc = libusb_detach_kernel_driver( usb_io, 0 )) ) {
+      fprintf( stderr, "S - Cannot detach kernel driver: %s\n", libusb_error_name(rc) );
+      return initFailed( rc );
+    }
+    kernel_driver_detached = true;
   }
 
   // Make it ours
-  if ( 0 != (rc = libusb_claim_interface(usb_io,0)) ) return rc;
+  if ( 0 != (rc = libusb_claim_interface( usb_io, 0 )) ) {
+    fprintf( stderr, "S - Cannot claim USB interface: %s\n", libusb_error_name(rc) );
+    return initFailed( rc );
+  }
 
   unsigned char buffer[64];
-  int total_count;
   
   // Phase 1 of amp init
   memset( buffer, 0, 64 );
   buffer[1] = 0xc3;
 
-  rc = sendCmd( buffer );
-  if ( rc!=0 ) return rc;
-  
-  // Clear reply
-  total_count = 0;
-  while ( total_count < 64 ) {
-    int count;
-    rc = libusb_interrupt_transfer( usb_io, USB_IN, buffer, 64, &count, USB_TIMEOUT_MS );
-    if ( rc && rc!=LIBUSB_ERROR_TIMEOUT ) return rc;
-    total_count += count;
-  }
+  if ( 0 != (rc = sendCmd( buffer )) ) return initFailed( rc );
+  if ( 0 != (rc = drainReply()) )      return initFailed( rc );
   
   // Phase 2 of amp init
   memset( buffer, 0, 64 );
   buffer[0] = 0x1a;
   buffer[1] = init_value;
 
-  rc = sendCmd( buffer );
-  if ( rc!=0 ) return rc;
-
-  // Clear reply
-  total_count = 0;
-  while ( total_count < 64 ) {
-    int count;
-    rc = libusb_interrupt_transfer( usb_io, USB_IN, buffer, 64, &count, USB_TIMEOUT_MS );
-    if ( rc && rc!=LIBUSB_ERROR_TIMEOUT ) return rc;
-    total_count += count;
-  }
+  if ( 0 != (rc = sendCmd( buffer )) ) return initFailed( rc );
+  if ( 0 != (rc = drainReply()) )      return initFailed( rc );
 
   return 0;
 }
@@ -395,7 +480,13 @@ Mustang::commStart( void ) {
   parm_read_sync.value = false;
 
   // Start thread
-  pthread_create( &worker, NULL, threadStarter, this );
+  rc = pthread_create( &worker, NULL, threadStarter, this );
+  if ( rc != 0 ) {
+    pthread_mutex_unlock( &parm_read_sync.lock );
+    fprintf( stderr, "S - Cannot start USB listener thread: %d\n", rc );
+    return rc;
+  }
+  worker_running = true;
 
   // Request parm dump
   memset( buffer, 0, 64 );
@@ -405,43 +496,60 @@ Mustang::commStart( void ) {
   rc = sendCmd( buffer );
 
   // Block until background thread tells us it's done
-  while ( rc==0 && !parm_read_sync.value ) pthread_cond_wait( &parm_read_sync.cond, &parm_read_sync.lock );
+  if ( rc==0 ) rc = awaitFlag( parm_read_sync, true, DUMP_TIMEOUT_MS );
   pthread_mutex_unlock( &parm_read_sync.lock );
   //
   /////
 
-  return 0;
+  // Don't leave the listener running against a connection the caller
+  // is about to tear down
+  if ( rc != 0 ) commShutdown();
+
+  return rc;
 }
 
 
 int
 Mustang::commShutdown( void ) {
-    pthread_mutex_lock( &shutdown_lock );
-    want_shutdown = true;
-    pthread_mutex_unlock( &shutdown_lock );
+  if ( !worker_running ) return 0;
 
-    void *status;
-    pthread_join( worker, &status );
+  pthread_mutex_lock( &shutdown_lock );
+  want_shutdown = true;
+  pthread_mutex_unlock( &shutdown_lock );
 
-    int rc = (long)status;
-    return rc;
+  void *status = NULL;
+  pthread_join( worker, &status );
+  worker_running = false;
+
+  // The listener exits with 0 on request, or the libusb error that
+  // ended it; a timeout is the normal idle state and not a failure.
+  int rc = (int)(long)status;
+  if ( rc == LIBUSB_ERROR_TIMEOUT ) rc = 0;
+  return rc;
 }
 
 
 int
 Mustang::deinitialize( void ) {
   if ( usb_io==NULL) return 0;
-  
-  int rc = libusb_release_interface( usb_io, 0 );
-  if ( rc && rc != LIBUSB_ERROR_NO_DEVICE ) return rc;
 
-  if ( (rc = libusb_attach_kernel_driver( usb_io,0)) ) return rc;
+  // Always run every cleanup step; report the first failure.
+  int result = 0;
+
+  int rc = libusb_release_interface( usb_io, 0 );
+  if ( rc && rc != LIBUSB_ERROR_NO_DEVICE ) result = rc;
+
+  if ( kernel_driver_detached ) {
+    rc = libusb_attach_kernel_driver( usb_io, 0 );
+    if ( rc && rc != LIBUSB_ERROR_NO_DEVICE && result == 0 ) result = rc;
+    kernel_driver_detached = false;
+  }
 
   libusb_close( usb_io );
   usb_io = NULL;
 
   libusb_exit( NULL );
-  return 0;
+  return result;
 }
 
 
@@ -463,7 +571,7 @@ Mustang::requestDump( void ) {
   rc = sendCmd( buffer );
 
   // Block until background thread tells us it's done
-  while ( rc==0 && !parm_read_sync.value ) pthread_cond_wait( &parm_read_sync.cond, &parm_read_sync.lock );
+  if ( rc==0 ) rc = awaitFlag( parm_read_sync, true, DUMP_TIMEOUT_MS );
   pthread_mutex_unlock( &parm_read_sync.lock );
   //
   //////
@@ -472,7 +580,7 @@ Mustang::requestDump( void ) {
   fprintf( stderr, "DEBUG: Parm dump completion acknowledged\n" );
 #endif
 
-  return 0;
+  return rc;
 }
 
 
@@ -488,16 +596,21 @@ Mustang::executeModelChange( unsigned char *buffer ) {
   // Setup amp personality
   model_change_sync.value = false;
   int rc = sendCmd( buffer );
-  while ( rc==0 && !model_change_sync.value ) pthread_cond_wait( &model_change_sync.cond, &model_change_sync.lock );
+  if ( rc==0 ) rc = awaitFlag( model_change_sync, true );
 
   // Execute command
-  model_change_sync.value = false;
-  rc = sendCmd( execute );
-  while ( rc==0 && !model_change_sync.value ) pthread_cond_wait( &model_change_sync.cond, &model_change_sync.lock );
+  if ( rc==0 ) {
+    model_change_sync.value = false;
+    rc = sendCmd( execute );
+  }
+  if ( rc==0 ) rc = awaitFlag( model_change_sync, true );
 
   pthread_mutex_unlock( &model_change_sync.lock );
   //
   //////
+
+  // Don't record a change the amp did not confirm
+  if ( rc != 0 ) return rc;
 
 #ifdef DEBUG
   fprintf( stderr, "DEBUG: Model change acknowledged\n" );
@@ -686,7 +799,8 @@ Mustang::ampControl( int cc, int value ) {
   memset( cmd, 0, 64 );
   
   pthread_mutex_lock( &dsp_sync[AMP_STATE].lock );
-  int rc = curr_amp->dispatch( cc, value, cmd );
+  // No state report yet for this DSP -> nothing to address
+  int rc = ( curr_amp==NULL ) ? -1 : curr_amp->dispatch( cc, value, cmd );
   pthread_mutex_unlock( &dsp_sync[AMP_STATE].lock );
 
   // If value out-of-range, just return gracefully
@@ -815,8 +929,9 @@ Mustang::setStomp( int ord ) {
       }
   }
 
+  // Keep the effect in whatever signal-chain slot it currently occupies
   pthread_mutex_lock( &dsp_sync[STOMP_STATE].lock );
-  buffer[FXSLOT] = curr_stomp->getSlot();
+  buffer[FXSLOT] = ( curr_stomp==NULL ) ? 0 : curr_stomp->getSlot();
   pthread_mutex_unlock( &dsp_sync[STOMP_STATE].lock );
   
   return executeModelChange( buffer );
@@ -831,7 +946,8 @@ Mustang::stompControl( int cc, int value ) {
   memset( cmd, 0, 64 );
   
   pthread_mutex_lock( &dsp_sync[STOMP_STATE].lock );
-  int rc = curr_stomp->dispatch( cc, value, cmd );
+  // No state report yet for this DSP -> nothing to address
+  int rc = ( curr_stomp==NULL ) ? -1 : curr_stomp->dispatch( cc, value, cmd );
   pthread_mutex_unlock( &dsp_sync[STOMP_STATE].lock );
 
   if ( rc<0 ) return 0;
@@ -959,8 +1075,9 @@ Mustang::setMod( int ord ) {
       }
   }
 
+  // Keep the effect in whatever signal-chain slot it currently occupies
   pthread_mutex_lock( &dsp_sync[MOD_STATE].lock );
-  buffer[FXSLOT] = curr_mod->getSlot();
+  buffer[FXSLOT] = ( curr_mod==NULL ) ? 0 : curr_mod->getSlot();
   pthread_mutex_unlock( &dsp_sync[MOD_STATE].lock );
   
   return executeModelChange( buffer );
@@ -975,7 +1092,8 @@ Mustang::modControl( int cc, int value ) {
   memset( cmd, 0, 64 );
   
   pthread_mutex_lock( &dsp_sync[MOD_STATE].lock );
-  int rc = curr_mod->dispatch( cc, value, cmd );
+  // No state report yet for this DSP -> nothing to address
+  int rc = ( curr_mod==NULL ) ? -1 : curr_mod->dispatch( cc, value, cmd );
   pthread_mutex_unlock( &dsp_sync[MOD_STATE].lock );
 
   if ( rc<0 ) return 0;
@@ -1071,8 +1189,9 @@ Mustang::setDelay( int ord ) {
       return 0;
   }
 
+  // Keep the effect in whatever signal-chain slot it currently occupies
   pthread_mutex_lock( &dsp_sync[DELAY_STATE].lock );
-  buffer[FXSLOT] = curr_delay->getSlot();
+  buffer[FXSLOT] = ( curr_delay==NULL ) ? 0 : curr_delay->getSlot();
   pthread_mutex_unlock( &dsp_sync[DELAY_STATE].lock );
   
   return executeModelChange( buffer );
@@ -1087,7 +1206,8 @@ Mustang::delayControl( int cc, int value ) {
   memset( cmd, 0, 64 );
   
   pthread_mutex_lock( &dsp_sync[DELAY_STATE].lock );
-  int rc = curr_delay->dispatch( cc, value, cmd );
+  // No state report yet for this DSP -> nothing to address
+  int rc = ( curr_delay==NULL ) ? -1 : curr_delay->dispatch( cc, value, cmd );
   pthread_mutex_unlock( &dsp_sync[DELAY_STATE].lock );
 
   if ( rc<0 ) return 0;
@@ -1156,8 +1276,9 @@ Mustang::setReverb( int ord ) {
       return 0;
   }
 
+  // Keep the effect in whatever signal-chain slot it currently occupies
   pthread_mutex_lock( &dsp_sync[REVERB_STATE].lock );
-  buffer[FXSLOT] = curr_reverb->getSlot();
+  buffer[FXSLOT] = ( curr_reverb==NULL ) ? 0 : curr_reverb->getSlot();
   pthread_mutex_unlock( &dsp_sync[REVERB_STATE].lock );
   
   return executeModelChange( buffer );
@@ -1172,7 +1293,8 @@ Mustang::reverbControl( int cc, int value ) {
   memset( cmd, 0, 64 );
   
   pthread_mutex_lock( &dsp_sync[REVERB_STATE].lock );
-  int rc = curr_reverb->dispatch( cc, value, cmd );
+  // No state report yet for this DSP -> nothing to address
+  int rc = ( curr_reverb==NULL ) ? -1 : curr_reverb->dispatch( cc, value, cmd );
   pthread_mutex_unlock( &dsp_sync[REVERB_STATE].lock );
 
   if ( rc<0 ) return 0;
@@ -1188,10 +1310,10 @@ Mustang::effectToggle(int cc, int value) {
   unsigned char buffer[64];
   memset(buffer, 0x00, 64);
 
+  if ( cc < 23 || cc > 26 ) return -1;
+
   // Logic is inverted ==> 0 is 'on'
-  int toggle;
-  if      ( value >= 0 && value <= 63 )  toggle = 1;
-  else if ( value > 63 && value <= 127 ) toggle = 0;
+  int toggle = ( value > 63 ) ? 0 : 1;
 
   buffer[0] = 0x19;
   buffer[1] = 0xc3;
@@ -1201,32 +1323,35 @@ Mustang::effectToggle(int cc, int value) {
   buffer[2] = family;
   buffer[3] = toggle;
 
+  // Translate 23..26 --> 1..4 (index into dsp parms array) and read
+  // the slot under that DSP's lock
+  int state_index = cc - 22;
+  unsigned char slot = 0;
+  pthread_mutex_lock( &dsp_sync[state_index].lock );
+  switch ( state_index ) {
+    case 1:
+      if ( curr_stomp )  slot = curr_stomp->getSlot();
+      break;
+    case 2:
+      if ( curr_mod )    slot = curr_mod->getSlot();
+      break;
+    case 3:
+      if ( curr_delay )  slot = curr_delay->getSlot();
+      break;
+    case 4:
+      if ( curr_reverb ) slot = curr_reverb->getSlot();
+      break;
+  }
+  pthread_mutex_unlock( &dsp_sync[state_index].lock );
+  buffer[4] = slot;
+
   ///// Critical Section
   //
   pthread_mutex_lock( &efx_toggle_sync.lock );
 
-  // Translate 23..26 --> 1..4 (index into dsp parms array)
-  int state_index = cc - 22;
-  unsigned char slot;
-  switch ( state_index ) {
-    case 1:
-      slot = curr_stomp->getSlot();
-      break;
-    case 2:
-      slot = curr_mod->getSlot();
-      break;
-    case 3:
-      slot = curr_delay->getSlot();
-      break;
-    case 4:
-      slot = curr_reverb->getSlot();
-      break;
-  }
-  buffer[4] = slot;
-
   efx_toggle_sync.value = false;
   int rc = sendCmd( buffer );
-  while ( rc==0 && ! efx_toggle_sync.value ) pthread_cond_wait( &efx_toggle_sync.cond, &efx_toggle_sync.lock );
+  if ( rc==0 ) rc = awaitFlag( efx_toggle_sync, true );
 
   pthread_mutex_unlock( &efx_toggle_sync.lock );
   //
@@ -1251,7 +1376,7 @@ Mustang::direct_control( unsigned char *buffer ) {
 
   cc_ack_sync.value = false;
   int rc = sendCmd( buffer );
-  while ( rc==0 && ! cc_ack_sync.value ) pthread_cond_wait( &cc_ack_sync.cond, &cc_ack_sync.lock );
+  if ( rc==0 ) rc = awaitFlag( cc_ack_sync, true );
 
   pthread_mutex_unlock( &cc_ack_sync.lock );
   //
@@ -1267,6 +1392,10 @@ Mustang::direct_control( unsigned char *buffer ) {
 
 int 
 Mustang::patchChange( int patch ) {
+  if ( patch < 0 || patch > 99 ) {
+    fprintf( stderr, "W - Preset %d out of range 0..99, ignored\n", patch );
+    return 0;
+  }
   if ( checkOrDisableTuner() < 0 ) return -1;
 
   unsigned char buffer[64];
@@ -1284,7 +1413,7 @@ Mustang::patchChange( int patch ) {
 
   pc_ack_sync.value = false;
   int rc = sendCmd( buffer );
-  while ( rc==0 && ! pc_ack_sync.value ) pthread_cond_wait( &pc_ack_sync.cond, &pc_ack_sync.lock );
+  if ( rc==0 ) rc = awaitFlag( pc_ack_sync, true );
 
   pthread_mutex_unlock( &pc_ack_sync.lock );
 
@@ -1292,9 +1421,11 @@ Mustang::patchChange( int patch ) {
   fprintf( stderr, "DEBUG: Leaving patch change\n" );
 #endif
 
-  pthread_mutex_lock( &preset_names_sync.lock );
-  curr_preset_idx = patch;
-  pthread_mutex_unlock( &preset_names_sync.lock );
+  if ( rc==0 ) {
+    pthread_mutex_lock( &preset_names_sync.lock );
+    curr_preset_idx = patch;
+    pthread_mutex_unlock( &preset_names_sync.lock );
+  }
   //
   ///////
 
@@ -1322,9 +1453,7 @@ Mustang::checkOrDisableTuner( void ) {
     buffer[1] = 0x01;
 
     rc = sendCmd( buffer );
-    if ( rc==0 ) {
-      while ( true==tuner_ack_sync.value ) pthread_cond_wait( &tuner_ack_sync.cond, &tuner_ack_sync.lock );
-    }
+    if ( rc==0 ) rc = awaitFlag( tuner_ack_sync, false );
   }
   pthread_mutex_unlock( &tuner_ack_sync.lock );
   //
@@ -1336,7 +1465,7 @@ Mustang::checkOrDisableTuner( void ) {
 
 int 
 Mustang::tunerMode( int value ) {
-  int rc;
+  int rc = 0;
   
   unsigned char buffer[64];
   memset(buffer, 0x00, 64);
@@ -1352,16 +1481,12 @@ Mustang::tunerMode( int value ) {
     // Tuner on
     buffer[2] = buffer[3] = buffer[4] = 0x01;
     rc = sendCmd( buffer );
-    if ( rc==0 ) {
-      while ( false==tuner_ack_sync.value ) pthread_cond_wait( &tuner_ack_sync.cond, &tuner_ack_sync.lock );
-    }
+    if ( rc==0 ) rc = awaitFlag( tuner_ack_sync, true );
   }
   else if ( value>=0 && value<=63 && true==tuner_ack_sync.value ) {
     // Tuner off
     rc = sendCmd( buffer );
-    if ( rc==0 ) {
-      while ( true==tuner_ack_sync.value ) pthread_cond_wait( &tuner_ack_sync.cond, &tuner_ack_sync.lock );
-    }
+    if ( rc==0 ) rc = awaitFlag( tuner_ack_sync, false );
   }
   pthread_mutex_unlock( &tuner_ack_sync.lock );
   //
@@ -1371,5 +1496,5 @@ Mustang::tunerMode( int value ) {
   fprintf( stderr, "DEBUG: Done tuner toggle\n" );
 #endif
 
-  return 0;
+  return rc;
 }

@@ -1,7 +1,6 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # Create a virtual MIDI port for Mustang amp
 
-import mido
 import rtmidi
 import time
 import sys

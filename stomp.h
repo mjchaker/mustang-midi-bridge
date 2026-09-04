@@ -29,8 +29,8 @@ public:
   virtual ~StompCC() {}
 
   int dispatch( int cc, int value, unsigned char *cmd );
-  const unsigned char *getModel( void ) { return model;}
-  const unsigned char getSlot( void ) { return slot;}
+  const unsigned char *getModel( void ) const { return model;}
+  unsigned char getSlot( void ) const { return slot;}
 
 private:
   virtual int cc29( int value, unsigned char *cmd ) = 0;
@@ -121,10 +121,10 @@ private:
     if ( value > 3 ) return -1;
     else             return discrete_control( 0x00, 0x05, 0x92, value, cmd );
   }
-  virtual int cc30( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc31( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc32( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc33( int value, unsigned char *cmd ) { return -1;}
+  virtual int cc30( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc31( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc32( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc33( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
 };
 
 
@@ -158,7 +158,7 @@ private:
   // Bright
   virtual int cc32( int value, unsigned char *cmd ) { return continuous_control( 0x03, 0x02, 0x01, value, cmd );}
   // n/a
-  virtual int cc33( int value, unsigned char *cmd ) { return -1;}
+  virtual int cc33( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
 };
 
 
@@ -175,7 +175,7 @@ private:
   // Bright
   virtual int cc32( int value, unsigned char *cmd ) { return continuous_control( 0x03, 0x03, 0x12, value, cmd );}
   // n/a
-  virtual int cc33( int value, unsigned char *cmd ) { return -1;}
+  virtual int cc33( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
 };
 
 
@@ -190,9 +190,9 @@ private:
   // Tone
   virtual int cc31( int value, unsigned char *cmd ) { return continuous_control( 0x02, 0x01, 0x01, value, cmd );}
   // n/a
-  virtual int cc32( int value, unsigned char *cmd ) { return -1;}
+  virtual int cc32( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
   // n/a
-  virtual int cc33( int value, unsigned char *cmd ) { return -1;}
+  virtual int cc33( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
 };
 
 
@@ -207,9 +207,9 @@ private:
   // Filter
   virtual int cc31( int value, unsigned char *cmd ) { return continuous_control( 0x02, 0x01, 0x01, value, cmd );}
   // n/a
-  virtual int cc32( int value, unsigned char *cmd ) { return -1;}
+  virtual int cc32( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
   // n/a
-  virtual int cc33( int value, unsigned char *cmd ) { return -1;}
+  virtual int cc33( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
 };
 
 
@@ -224,9 +224,9 @@ private:
   // Sustain
   virtual int cc31( int value, unsigned char *cmd ) { return continuous_control( 0x02, 0x02, 0x01, value, cmd );}
   // n/a
-  virtual int cc32( int value, unsigned char *cmd ) { return -1;}
+  virtual int cc32( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
   // n/a
-  virtual int cc33( int value, unsigned char *cmd ) { return -1;}
+  virtual int cc33( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
 };
 
 
@@ -234,11 +234,11 @@ class NullStompCC : public StompCC {
 public:
   NullStompCC( Mustang * theAmp, const unsigned char *model, const unsigned char theSlot ) : StompCC(theAmp,model,theSlot) {}
 private:
-  virtual int cc29( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc30( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc31( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc32( int value, unsigned char *cmd ) { return -1;}
-  virtual int cc33( int value, unsigned char *cmd ) { return -1;}
+  virtual int cc29( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc30( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc31( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc32( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
+  virtual int cc33( int /*value*/, unsigned char * /*cmd*/ ) { return -1;}
 };
 
 

@@ -1,53 +1,52 @@
-# Check for Homebrew libusb on macOS M1
-HOMEBREW_PREFIX := $(shell brew --prefix 2>/dev/null || echo "/opt/homebrew")
-BREW_LIBUSB := $(shell ls -d $(HOMEBREW_PREFIX)/Cellar/libusb/*/include 2>/dev/null | head -n 1)
-BREW_RTMIDI := $(shell ls -d $(HOMEBREW_PREFIX)/Cellar/rtmidi/*/include 2>/dev/null | head -n 1)
+# mustang_midi build
+#
+# Works on Linux (apt: librtmidi-dev libusb-1.0-0-dev) and on macOS with
+# Homebrew (brew install rtmidi libusb pkg-config).  Library locations are
+# discovered through pkg-config when it is available; otherwise we fall back
+# to the conventional system paths.
+#
+# Targets:  make (or make opt)  optimized build
+#           make debug           -g plus DEBUG tracing of USB traffic
+#           make test            build and run the hardware-free unit tests
+#           make clean
+#
+# Old rtmidi (RtError instead of RtMidiError):  make CPPFLAGS=-DRTMIDI_2_0
 
-# Include directories
-INCDIRS = 
-ifneq (,$(BREW_RTMIDI))
-  INCDIRS += -I$(BREW_RTMIDI) -I$(BREW_RTMIDI)/rtmidi
-endif
-ifneq (,$(BREW_LIBUSB))
-  INCDIRS += -I$(BREW_LIBUSB)
-endif
+BIN      = mustang_midi
+TEST_BIN = test_dispatch
 
 SRC = $(wildcard *.cpp)
-OBJ = $(subst .cpp,.o,$(SRC))
-DEP = $(subst .cpp,.d,$(SRC))
+OBJ = $(SRC:.cpp=.o)
+DEP = $(SRC:.cpp=.d)
+
+# Objects shared with the unit test: everything except main()
+LIB_OBJ = $(filter-out mustang_midi.o,$(OBJ))
+
+PKG_CONFIG ?= pkg-config
+PKG_OK := $(shell $(PKG_CONFIG) --exists rtmidi libusb-1.0 2>/dev/null && echo yes)
+
+ifeq ($(PKG_OK),yes)
+  PKG_CFLAGS := $(shell $(PKG_CONFIG) --cflags rtmidi libusb-1.0)
+  PKG_LIBS   := $(shell $(PKG_CONFIG) --libs rtmidi libusb-1.0)
+else
+  # Fallback: newer distributions put the rtmidi header in a subdirectory
+  PKG_CFLAGS := -I/usr/include/rtmidi -I/usr/include/libusb-1.0
+  ifeq ($(shell uname -s),Darwin)
+    HOMEBREW_PREFIX := $(shell brew --prefix 2>/dev/null || echo /opt/homebrew)
+    PKG_CFLAGS += -I$(HOMEBREW_PREFIX)/include -I$(HOMEBREW_PREFIX)/include/rtmidi -I$(HOMEBREW_PREFIX)/include/libusb-1.0
+    PKG_LIBS   := -L$(HOMEBREW_PREFIX)/lib
+  endif
+  PKG_LIBS += -lrtmidi -lusb-1.0
+endif
 
 # The -M* switches automatically generate .d dependency files
-CPPFLAGS += -MP -MMD $(INCDIRS)
+CPPFLAGS += -MP -MMD $(PKG_CFLAGS)
+CXXFLAGS += -std=c++11 -Wall -Wextra
+LDLIBS   += $(PKG_LIBS) -lpthread
 
-# Use C++11 standard for modern features and add architecture for M1
-CXXFLAGS += -std=c++11 -arch arm64
+.PHONY: all opt debug test clean
 
-# Homebrew library paths on macOS
-BREW_LIBUSB_LIB := $(shell ls -d $(HOMEBREW_PREFIX)/Cellar/libusb/*/lib 2>/dev/null | head -n 1)
-BREW_RTMIDI_LIB := $(shell ls -d $(HOMEBREW_PREFIX)/Cellar/rtmidi/*/lib 2>/dev/null | head -n 1)
-
-# Find actual library files
-BREW_LIBUSB_LIBFILE := $(shell find $(BREW_LIBUSB_LIB) -name "libusb-1.0.dylib" 2>/dev/null | head -n 1)
-BREW_RTMIDI_LIBFILE := $(shell find $(BREW_RTMIDI_LIB) -name "librtmidi.dylib" 2>/dev/null | head -n 1)
-
-# On macOS, use exact paths to dylib files for linking
-LDLIBS =
-ifneq (,$(BREW_LIBUSB_LIBFILE))
-  LDLIBS += $(BREW_LIBUSB_LIBFILE)
-else
-  LDLIBS += -lusb-1.0
-endif
-
-ifneq (,$(BREW_RTMIDI_LIBFILE))
-  LDLIBS += $(BREW_RTMIDI_LIBFILE)
-else
-  LDLIBS += -lrtmidi
-endif
-
-# Common libraries
-LDLIBS += -lpthread
-
-BIN = mustang_midi
+all: opt
 
 opt: CXXFLAGS += -O3 -DNDEBUG
 opt: $(BIN)
@@ -56,9 +55,16 @@ debug: CXXFLAGS += -g -DDEBUG
 debug: $(BIN)
 
 $(BIN): $(OBJ)
-  $(CXX) $^ -o $@ $(LDLIBS)
+	$(CXX) $^ -o $@ $(LDLIBS)
+
+# Unit tests exercise the CC -> USB byte-layout logic; no amp required.
+$(TEST_BIN): tests/test_dispatch.cpp $(LIB_OBJ)
+	$(CXX) $(PKG_CFLAGS) $(CXXFLAGS) -I. $^ -o $@ $(LDLIBS)
+
+test: $(TEST_BIN)
+	./$(TEST_BIN)
 
 clean:
-  rm -f $(DEP) $(OBJ) $(BIN) *~
+	rm -f $(DEP) $(OBJ) $(BIN) $(TEST_BIN) *~
 
--include $(SRC:.cpp=.d)
+-include $(DEP)

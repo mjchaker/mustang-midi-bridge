@@ -1,0 +1,13 @@
+# Build artifacts
+*.o
+*.d
+mustang_midi
+test_dispatch
+
+# Editor / OS noise
+*~
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
